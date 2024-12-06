@@ -3818,6 +3818,8 @@ void PPTLinkageMain()
 		if (_waccess((globalPath + L"opt\\pptcom_configuration.json").c_str(), 4) == 0) PptComReadSetting();
 		PptComWriteSetting();
 	}
+	// 检查相关注册表项目
+	pptComSetlist.setAdmin = IsPowerPointRunAsAdminSet();
 
 	thread(GetPptState).detach();
 	thread(PptInfo).detach();
@@ -3837,91 +3839,175 @@ void PPTLinkageMain()
 	threadStatus[L"PptDraw"] = false;
 }
 
+// 附加检测项
+bool IsPowerPointRunAsAdminSet()
+{
+	// Registry paths to check
+	const std::wstring subKeys[] = {
+		L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers"
+	};
+
+	// Registry roots to check
+	HKEY hRoots[] = { HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER };
+
+	for (HKEY hRoot : hRoots)
+	{
+		for (const std::wstring& subKey : subKeys)
+		{
+			HKEY hKey;
+			// Open the registry key
+			if (RegOpenKeyExW(hRoot, subKey.c_str(), 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+			{
+				DWORD valueCount = 0;
+				DWORD maxValueNameLen = 0;
+				DWORD maxValueDataLen = 0;
+				// Get the number of values and their max sizes
+				if (RegQueryInfoKeyW(hKey, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+					&valueCount, &maxValueNameLen, &maxValueDataLen, nullptr, nullptr) == ERROR_SUCCESS)
+				{
+					// Increase lengths to accommodate null terminators
+					maxValueNameLen++;
+					maxValueDataLen++;
+
+					// Allocate buffers
+					std::wstring valueName(maxValueNameLen, L'\0');
+					std::vector<BYTE> data(maxValueDataLen);
+
+					// Enumerate all values
+					for (DWORD i = 0; i < valueCount; ++i)
+					{
+						DWORD valueNameLen = maxValueNameLen;
+						DWORD dataSize = maxValueDataLen;
+						DWORD type = 0;
+
+						// Enumerate each value
+						if (RegEnumValueW(hKey, i, &valueName[0], &valueNameLen, nullptr, &type, data.data(), &dataSize) == ERROR_SUCCESS)
+						{
+							valueName.resize(valueNameLen);
+
+							// Convert value name to lowercase for case-insensitive comparison
+							std::wstring lowerValueName = valueName;
+							std::transform(lowerValueName.begin(), lowerValueName.end(), lowerValueName.begin(), ::towlower);
+
+							// Check if the value name contains "powerpoint.exe"
+							if (lowerValueName.find(L"powerpoint.exe") != std::wstring::npos || lowerValueName.find(L"ksolaunch.exe") != std::wstring::npos)
+							{
+								if (type == REG_SZ)
+								{
+									// Convert data to wide string
+									std::wstring dataStr(reinterpret_cast<WCHAR*>(data.data()), dataSize / sizeof(WCHAR) - 1);
+
+									// Convert data string to lowercase
+									std::wstring lowerDataStr = dataStr;
+									std::transform(lowerDataStr.begin(), lowerDataStr.end(), lowerDataStr.begin(), ::towlower);
+
+									// Check if data contains "runasadmin"
+									if (lowerDataStr.find(L"runasadmin") != std::wstring::npos)
+									{
+										RegCloseKey(hKey);
+										return true;
+									}
+								}
+							}
+
+							// Reset buffers for next iteration
+							valueName.assign(maxValueNameLen, L'\0');
+							data.assign(maxValueDataLen, 0);
+						}
+					}
+				}
+				RegCloseKey(hKey);
+			}
+		}
+	}
+	return false;
+}
+
 // --------------------------------------------------
 // 其他插件
 
 // DesktopDrawpadBlocker 插件
 void StartDesktopDrawpadBlocker()
 {
-	if (ddbSetList.DdbEnable)
+	if (ddbInteractionSetList.DdbEnable)
 	{
 		// 配置 json
 		{
-			if (_waccess((globalPath + L"PlugIn\\DDB\\interaction_configuration.json").c_str(), 0) == 0) DdbReadSetting();
+			if (_waccess((dataPath + L"\\DesktopDrawpadBlocker\\interaction_configuration.json").c_str(), 0) == 0) DdbReadInteraction();
 
-			ddbSetList.hostPath = GetCurrentExePath();
-			if (ddbSetList.DdbEnhance)
+			ddbInteractionSetList.hostPath = GetCurrentExePath();
+			if (ddbInteractionSetList.DdbEnhance)
 			{
-				ddbSetList.mode = 0;
-				ddbSetList.restartHost = true;
+				ddbInteractionSetList.mode = 0;
+				ddbInteractionSetList.restartHost = true;
 			}
 			else
 			{
-				ddbSetList.mode = 1;
-				ddbSetList.restartHost = true;
+				ddbInteractionSetList.mode = 1;
+				ddbInteractionSetList.restartHost = true;
 			}
 		}
 
 		// 配置 EXE
-		if (_waccess((globalPath + L"PlugIn\\DDB\\DesktopDrawpadBlocker.exe").c_str(), 0) == -1)
+		if (_waccess((dataPath + L"\\DesktopDrawpadBlocker\\DesktopDrawpadBlocker.exe").c_str(), 0) == -1)
 		{
-			if (_waccess((globalPath + L"PlugIn\\DDB").c_str(), 0) == -1)
+			if (_waccess((dataPath + L"\\DesktopDrawpadBlocker").c_str(), 0) == -1)
 			{
 				error_code ec;
-				filesystem::create_directories(globalPath + L"PlugIn\\DDB", ec);
+				filesystem::create_directories(dataPath + L"\\DesktopDrawpadBlocker", ec);
 			}
-			ExtractResource((globalPath + L"PlugIn\\DDB\\DesktopDrawpadBlocker.exe").c_str(), L"EXE", MAKEINTRESOURCE(237));
+			ExtractResource((dataPath + L"\\DesktopDrawpadBlocker\\DesktopDrawpadBlocker.exe").c_str(), L"EXE", MAKEINTRESOURCE(237));
 		}
 		else
 		{
 			string hash_sha256;
 			{
 				hashwrapper* myWrapper = new sha256wrapper();
-				hash_sha256 = myWrapper->getHashFromFileW(globalPath + L"PlugIn\\DDB\\DesktopDrawpadBlocker.exe");
+				hash_sha256 = myWrapper->getHashFromFileW(dataPath + L"\\DesktopDrawpadBlocker\\DesktopDrawpadBlocker.exe");
 				delete myWrapper;
 			}
 
-			if (hash_sha256 != ddbSetList.DdbSHA256)
+			if (hash_sha256 != ddbInteractionSetList.DdbSHA256)
 			{
-				if (isProcessRunning((globalPath + L"PlugIn\\DDB\\DesktopDrawpadBlocker.exe").c_str()))
+				if (isProcessRunning((dataPath + L"\\DesktopDrawpadBlocker\\DesktopDrawpadBlocker.exe").c_str()))
 				{
 					// 需要关闭旧版 DDB 并更新版本
 
-					DdbWriteSetting(true, true);
+					DdbWriteInteraction(true, true);
 					for (int i = 1; i <= 20; i++)
 					{
-						if (!isProcessRunning((globalPath + L"PlugIn\\DDB\\DesktopDrawpadBlocker.exe").c_str()))
+						if (!isProcessRunning((dataPath + L"\\DesktopDrawpadBlocker\\DesktopDrawpadBlocker.exe").c_str()))
 							break;
 						this_thread::sleep_for(chrono::milliseconds(500));
 					}
 				}
-				ExtractResource((globalPath + L"PlugIn\\DDB\\DesktopDrawpadBlocker.exe").c_str(), L"EXE", MAKEINTRESOURCE(237));
+				ExtractResource((dataPath + L"\\DesktopDrawpadBlocker\\DesktopDrawpadBlocker.exe").c_str(), L"EXE", MAKEINTRESOURCE(237));
 			}
 		}
 
 		// 创建开机自启标识
-		if (ddbSetList.DdbEnhance && _waccess((globalPath + L"PlugIn\\DDB\\start_up.signal").c_str(), 0) == -1)
+		if (ddbInteractionSetList.DdbEnhance && _waccess((dataPath + L"\\DesktopDrawpadBlocker\\start_up.signal").c_str(), 0) == -1)
 		{
-			std::ofstream file((globalPath + L"PlugIn\\DDB\\start_up.signal").c_str());
+			std::ofstream file((dataPath + L"\\DesktopDrawpadBlocker\\start_up.signal").c_str());
 			file.close();
 		}
 		// 移除开机自启标识
-		else if (!ddbSetList.DdbEnhance && _waccess((globalPath + L"PlugIn\\DDB\\start_up.signal").c_str(), 0) == 0)
+		else if (!ddbInteractionSetList.DdbEnhance && _waccess((dataPath + L"\\DesktopDrawpadBlocker\\start_up.signal").c_str(), 0) == 0)
 		{
 			error_code ec;
-			filesystem::remove(globalPath + L"PlugIn\\DDB\\start_up.signal", ec);
+			filesystem::remove(dataPath + L"\\DesktopDrawpadBlocker\\start_up.signal", ec);
 		}
 
 		// 启动 DDB
-		if (!isProcessRunning((globalPath + L"PlugIn\\DDB\\DesktopDrawpadBlocker.exe").c_str()))
+		if (!isProcessRunning((dataPath + L"\\DesktopDrawpadBlocker\\DesktopDrawpadBlocker.exe").c_str()))
 		{
-			DdbWriteSetting(true, false);
-			ShellExecuteW(NULL, NULL, (globalPath + L"PlugIn\\DDB\\DesktopDrawpadBlocker.exe").c_str(), NULL, NULL, SW_SHOWNORMAL);
+			DdbWriteInteraction(true, false);
+			ShellExecuteW(NULL, NULL, (dataPath + L"\\DesktopDrawpadBlocker\\DesktopDrawpadBlocker.exe").c_str(), NULL, NULL, SW_SHOWNORMAL);
 		}
 	}
-	else if (_waccess((globalPath + L"PlugIn\\DDB").c_str(), 0) == 0)
+	else if (_waccess((dataPath + L"\\DesktopDrawpadBlocker").c_str(), 0) == 0)
 	{
 		error_code ec;
-		filesystem::remove_all(globalPath + L"PlugIn\\DDB", ec);
+		filesystem::remove_all(dataPath + L"\\DesktopDrawpadBlocker", ec);
 	}
 }

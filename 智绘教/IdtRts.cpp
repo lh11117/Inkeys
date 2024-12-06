@@ -1,20 +1,23 @@
 ﻿#include "IdtRts.h"
 
+#include "IdtDrawpad.h"
+
 int uRealTimeStylus;
 
-bool touchDown = false;							// 表示触摸设备是否被按下
-int touchNum = 0;								// 触摸点的点击个数
+bool touchDown = false;										// 表示触摸设备是否被按下
+int touchNum = 0;											// 触摸点的点击个数
+
 unordered_map<LONG, pair<int, int>> PreviousPointPosition;	//用于速度计算
-
 unordered_map<LONG, double> TouchSpeed;
-unordered_map<LONG, TouchMode> TouchPos;
-vector<LONG> TouchList;
 
+unordered_map<LONG, TouchMode> TouchPos;
 deque<TouchInfo> TouchTemp;
+vector<LONG> TouchList;
 
 LONG TouchCnt = 0;
 unordered_map<LONG, LONG> TouchPointer;
-shared_mutex PointPosSm, TouchSpeedSm, PointListSm, PointTempSm;
+
+shared_mutex touchNumSm, touchPosSm, touchSpeedSm, pointListSm, touchTempSm, touchPointerSm;
 
 IRealTimeStylus* g_pRealTimeStylus = NULL;
 IStylusSyncPlugin* g_pSyncEventHandlerRTS = NULL;
@@ -46,7 +49,24 @@ IRealTimeStylus* CreateRealTimeStylus(HWND hWnd)
 		return NULL;
 	}
 
-	// Register RTS object for receiving multi-touch input.
+	// 禁用 win7 轻拂手势
+	IRealTimeStylus2* pRealTimeStylus2 = NULL;
+	hr = pRealTimeStylus->QueryInterface(&pRealTimeStylus2);
+	if (FAILED(hr))
+	{
+		pRealTimeStylus->Release();
+		return NULL;
+	}
+	hr = pRealTimeStylus2->put_FlicksEnabled(FALSE);
+	if (FAILED(hr))
+	{
+		pRealTimeStylus->Release();
+		pRealTimeStylus2->Release();
+		return NULL;
+	}
+	pRealTimeStylus2->Release();
+
+	// 注册RTS对象以接收多点触摸输入。
 	IRealTimeStylus3* pRealTimeStylus3 = NULL;
 	hr = pRealTimeStylus->QueryInterface(&pRealTimeStylus3);
 	if (FAILED(hr))
@@ -87,6 +107,211 @@ bool EnableRealTimeStylus(IRealTimeStylus* pRealTimeStylus)
 	return true;
 }
 
+IStylusSyncPlugin* CSyncEventHandlerRTS::Create(IRealTimeStylus* pRealTimeStylus)
+{
+	// Check input argument
+	if (pRealTimeStylus == NULL)
+	{
+		//ASSERT(pRealTimeStylus != NULL && L"CSyncEventHandlerRTS::Create: invalid argument RealTimeStylus");
+		return NULL;
+	}
+
+	// Instantiate CSyncEventHandlerRTS object
+	CSyncEventHandlerRTS* pSyncEventHandlerRTS = new CSyncEventHandlerRTS();
+	if (pSyncEventHandlerRTS == NULL)
+	{
+		//ASSERT(pSyncEventHandlerRTS != NULL && L"CSyncEventHandlerRTS::Create: cannot create instance of CSyncEventHandlerRTS");
+		return NULL;
+	}
+
+	// Create free-threaded marshaller for this object and aggregate it.
+	HRESULT hr = CoCreateFreeThreadedMarshaler(pSyncEventHandlerRTS, &pSyncEventHandlerRTS->m_punkFTMarshaller);
+	if (FAILED(hr))
+	{
+		//ASSERT(SUCCEEDED(hr) && L"CSyncEventHandlerRTS::Create: cannot create free-threaded marshaller");
+		pSyncEventHandlerRTS->Release();
+		return NULL;
+	}
+
+	// Add CSyncEventHandlerRTS object to the list of synchronous plugins in the RTS object.
+	hr = pRealTimeStylus->AddStylusSyncPlugin(
+		0,                      // insert plugin at position 0 in the sync plugin list
+		pSyncEventHandlerRTS);  // plugin to be inserted - event handler CSyncEventHandlerRTS
+	if (FAILED(hr))
+	{
+		//ASSERT(SUCCEEDED(hr) && L"CEventHandlerRTS::Create: failed to add CSyncEventHandlerRTS to the RealTimeStylus plugins");
+		pSyncEventHandlerRTS->Release();
+		return NULL;
+	}
+
+	return pSyncEventHandlerRTS;
+}
+HRESULT CSyncEventHandlerRTS::StylusDown(IRealTimeStylus* piRtsSrc, const StylusInfo* pStylusInfo, ULONG /*cPktCount*/, LONG* pPacket, LONG** /*ppInOutPkts*/)
+{
+	uRealTimeStylus = 2;
+
+	// 这是一个按下状态
+	TouchMode mode{};
+	TouchInfo info{};
+
+	ULONG ulPacketProperties;
+	PACKET_PROPERTY* pPacketProperties;
+	{
+		ULONG ulTcidCount;
+		TABLET_CONTEXT_ID* pTcids;
+		piRtsSrc->GetAllTabletContextIds(&ulTcidCount, &pTcids);
+		piRtsSrc->GetPacketDescriptionData(pTcids[0], &mode.inkToDeviceScaleX, &mode.inkToDeviceScaleY, &ulPacketProperties, &pPacketProperties);
+		CoTaskMemFree(pTcids);
+	}
+	piRtsSrc->GetPacketDescriptionData(pStylusInfo->tcid, nullptr, nullptr, &ulPacketProperties, &pPacketProperties);
+
+	for (int i = 0; i < ulPacketProperties; i++)
+	{
+		GUID guid = pPacketProperties[i].guid;
+		if (guid == GUID_PACKETPROPERTY_GUID_X) mode.pt.x = LONG(pPacket[i] * mode.inkToDeviceScaleX + 0.5);
+		else if (guid == GUID_PACKETPROPERTY_GUID_Y) mode.pt.y = LONG(pPacket[i] * mode.inkToDeviceScaleY + 0.5);
+		else if (guid == GUID_PACKETPROPERTY_GUID_NORMAL_PRESSURE)
+		{
+			mode.logicalMin = pPacketProperties[i].PropertyMetrics.nLogicalMin;
+			mode.logicalMax = pPacketProperties[i].PropertyMetrics.nLogicalMax;
+
+			mode.pressure = double(pPacket[i] - mode.logicalMin) / double(mode.logicalMax - mode.logicalMin);
+		}
+		else if (guid == GUID_PACKETPROPERTY_GUID_WIDTH) mode.touchWidth = LONG(pPacket[i] * mode.inkToDeviceScaleX + 0.5);
+		else if (guid == GUID_PACKETPROPERTY_GUID_HEIGHT) mode.touchHeight = LONG(pPacket[i] * mode.inkToDeviceScaleY + 0.5);
+	}
+	CoTaskMemFree(pPacketProperties);
+
+	unique_lock<shared_mutex> lockTouchPointer(touchPointerSm);
+	TouchPointer[pStylusInfo->cid] = ++TouchCnt;
+	info.pid = TouchCnt;
+	TouchCnt %= 100000;
+	lockTouchPointer.unlock();
+
+	std::unique_lock<std::shared_mutex> lock1(touchPosSm);
+	TouchPos[TouchCnt] = mode;
+	lock1.unlock();
+
+	std::unique_lock<std::shared_mutex> lock2(touchSpeedSm);
+	TouchSpeed[TouchCnt] = 0;
+	PreviousPointPosition[TouchCnt].first = PreviousPointPosition[TouchCnt].second = -1;
+	lock2.unlock();
+
+	std::unique_lock<std::shared_mutex> lock3(pointListSm);
+	TouchList.push_back(TouchCnt);
+	lock3.unlock();
+
+	// 获取设备类型
+	{
+		IInkTablet* piTablet = NULL;
+		piRtsSrc->GetTabletFromTabletContextId(pStylusInfo->tcid, &piTablet);
+
+		IInkTablet2* piTablet2 = NULL;
+		piTablet->QueryInterface(&piTablet2);
+
+		TabletDeviceKind temp;
+		piTablet2->get_DeviceKind(&temp);
+
+		{
+			if (temp == TabletDeviceKind::TDK_Touch) info.type = 0;
+			else if (temp == TabletDeviceKind::TDK_Pen) info.type = 1;
+			else
+			{
+				if (KeyBoradDown[VK_RBUTTON] && !KeyBoradDown[VK_LBUTTON]) info.type = 3;
+				else info.type = 2;
+			}
+		}
+
+		piTablet2->Release();
+		piTablet->Release();
+	}
+	mode.isInvertedCursor = pStylusInfo->bIsInvertedCursor;
+	info.mode = mode;
+
+	std::unique_lock<std::shared_mutex> lock4(touchTempSm);
+	TouchTemp.push_back(info);
+	lock4.unlock();
+
+	unique_lock<shared_mutex> locktouchNum(touchNumSm);
+	touchNum++, touchDown = true;
+	locktouchNum.unlock();
+
+	return S_OK;
+}
+HRESULT CSyncEventHandlerRTS::StylusUp(IRealTimeStylus*, const StylusInfo* pStylusInfo, ULONG /*cPktCount*/, LONG* pPacket, LONG** /*ppInOutPkts*/)
+{
+	uRealTimeStylus = 3;
+
+	// 这是一个抬起状态
+
+	unique_lock<shared_mutex> locktouchNum(touchNumSm);
+	touchNum = max(0, touchNum - 1);
+	if (touchNum == 0) touchDown = false;
+	locktouchNum.unlock();
+
+	auto it = std::find(TouchList.begin(), TouchList.end(), TouchPointer[pStylusInfo->cid]);
+	if (it != TouchList.end())
+	{
+		std::unique_lock<std::shared_mutex> lock1(pointListSm);
+		TouchList.erase(it);
+		TouchPointer.erase(pStylusInfo->cid);
+		lock1.unlock();
+	}
+
+	shared_lock<shared_mutex> locktouchNum2(touchNumSm);
+	int touchNumTemp = touchNum;
+	locktouchNum2.unlock();
+
+	if (touchNumTemp == 0)
+	{
+		unique_lock<shared_mutex> lock(touchPosSm);
+		TouchPos.clear();
+		lock.unlock();
+	}
+
+	return S_OK;
+}
+HRESULT CSyncEventHandlerRTS::Packets(IRealTimeStylus* piRtsSrc, const StylusInfo* pStylusInfo, ULONG /*cPktCount*/, ULONG /*cPktBuffLength*/, LONG* pPacket, ULONG* /*pcInOutPkts*/, LONG** /*ppInOutPkts*/)
+{
+	uRealTimeStylus = 4;
+
+	// 这是一个移动状态
+
+	ULONG ulPacketProperties;
+	PACKET_PROPERTY* pPacketProperties;
+	piRtsSrc->GetPacketDescriptionData(pStylusInfo->tcid, nullptr, nullptr, &ulPacketProperties, &pPacketProperties);
+
+	shared_lock<shared_mutex> lockTouchPointer(touchPointerSm);
+	int pid = TouchPointer[pStylusInfo->cid];
+	lockTouchPointer.unlock();
+
+	shared_lock<shared_mutex> lock1(touchPosSm);
+	TouchMode mode = TouchPos[pid];
+	lock1.unlock();
+	for (int i = 0; i < ulPacketProperties; i++)
+	{
+		GUID guid = pPacketProperties[i].guid;
+		if (guid == GUID_PACKETPROPERTY_GUID_X) mode.pt.x = LONG(pPacket[i] * mode.inkToDeviceScaleX + 0.5);
+		else if (guid == GUID_PACKETPROPERTY_GUID_Y) mode.pt.y = LONG(pPacket[i] * mode.inkToDeviceScaleY + 0.5);
+		else if (guid == GUID_PACKETPROPERTY_GUID_NORMAL_PRESSURE) mode.pressure = double(pPacket[i] - mode.logicalMin) / double(mode.logicalMax - mode.logicalMin);
+		else if (guid == GUID_PACKETPROPERTY_GUID_WIDTH) mode.touchWidth = LONG(pPacket[i] * mode.inkToDeviceScaleX + 0.5);
+		else if (guid == GUID_PACKETPROPERTY_GUID_HEIGHT) mode.touchHeight = LONG(pPacket[i] * mode.inkToDeviceScaleY + 0.5);
+	}
+	CoTaskMemFree(pPacketProperties);
+
+	unique_lock<shared_mutex> lock2(touchPosSm);
+	TouchPos[pid] = mode;
+	lock2.unlock();
+
+	return S_OK;
+}
+HRESULT CSyncEventHandlerRTS::DataInterest(RealTimeStylusDataInterest* pDataInterest)
+{
+	*pDataInterest = (RealTimeStylusDataInterest)(RTSDI_StylusDown | RTSDI_Packets | RTSDI_StylusUp);
+
+	return S_OK;
+}
+
 void RTSSpeed()
 {
 	int x, y;
@@ -97,17 +322,17 @@ void RTSSpeed()
 	{
 		for (int i = 0; i < touchNum; i++)
 		{
-			std::shared_lock<std::shared_mutex> lock1(PointPosSm);
+			std::shared_lock<std::shared_mutex> lock1(touchPosSm);
 			x = TouchPos[TouchList[i]].pt.x;
 			y = TouchPos[TouchList[i]].pt.y;
 			lock1.unlock();
 
-			std::shared_lock<std::shared_mutex> lock2(TouchSpeedSm);
+			std::shared_lock<std::shared_mutex> lock2(touchSpeedSm);
 			if (PreviousPointPosition[TouchList[i]].first == -1 && PreviousPointPosition[TouchList[i]].second == -1) PreviousPointPosition[TouchList[i]].first = x, PreviousPointPosition[TouchList[i]].second = y, speed = 1;
 			else speed = (TouchSpeed[TouchList[i]] + sqrt(pow(x - PreviousPointPosition[TouchList[i]].first, 2) + pow(y - PreviousPointPosition[TouchList[i]].second, 2))) / 2;
 			lock2.unlock();
 
-			std::unique_lock<std::shared_mutex> lock3(TouchSpeedSm);
+			std::unique_lock<std::shared_mutex> lock3(touchSpeedSm);
 			TouchSpeed[TouchList[i]] = speed;
 			lock3.unlock();
 

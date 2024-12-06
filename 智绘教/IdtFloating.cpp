@@ -167,10 +167,11 @@ LRESULT CALLBACK FloatingHookCallback(int nCode, WPARAM wParam, LPARAM lParam)
 	if (nCode >= 0)
 	{
 		if (wParam == WM_LBUTTONDOWN) KeyBoradDown[VK_LBUTTON] = true;
-		else if (wParam == WM_MBUTTONDOWN) KeyBoradDown[VK_MBUTTON] = true;
-		else if (wParam == WM_RBUTTONDOWN) KeyBoradDown[VK_RBUTTON] = true;
 		else if (wParam == WM_LBUTTONUP) KeyBoradDown[VK_LBUTTON] = false;
+		else if (wParam == WM_MBUTTONDOWN) KeyBoradDown[VK_MBUTTON] = true;
 		else if (wParam == WM_MBUTTONUP) KeyBoradDown[VK_MBUTTON] = false;
+
+		else if (wParam == WM_RBUTTONDOWN) KeyBoradDown[VK_RBUTTON] = true;
 		else if (wParam == WM_RBUTTONUP) KeyBoradDown[VK_RBUTTON] = false;
 
 		if (wParam == WM_MOUSEWHEEL && stateMode.StateModeSelect != StateModeSelectEnum::IdtSelection && !penetrate.select && ppt_show != NULL)
@@ -274,8 +275,8 @@ void DrawScreen()
 		{
 			//SetWindowTransparent(true, 0);
 
-			setbkmode(TRANSPARENT);
-			setbkcolor(RGB(255, 255, 255));
+			//setbkmode(TRANSPARENT);
+			//setbkcolor(RGB(255, 255, 255));
 
 			DisableResizing(floating_window, true);//禁止窗口拉伸
 			SetWindowLong(floating_window, GWL_STYLE, GetWindowLong(floating_window, GWL_STYLE) & ~WS_CAPTION);//隐藏标题栏
@@ -4544,7 +4545,7 @@ void DrawScreen()
 			{
 				ChangeColor(floating_icon[7], UIControlColor[L"Image/test/fill"].v);
 				hiex::TransparentImage(&background, int(UIControl[L"Image/test/x"].v), int(UIControl[L"Image/test/y"].v), &floating_icon[7], int((UIControlColor[L"Image/test/fill"].v >> 24) & 0xff));
-				if (AutomaticUpdateStep == 8) hiex::EasyX_Gdiplus_SolidEllipse(UIControl[L"Image/test/x"].v + 30, UIControl[L"Image/test/y"].v, 10, 10, RGBA(228, 55, 66, 255), false, SmoothingModeHighQuality, &background);
+				//if (AutomaticUpdateStep == 8) hiex::EasyX_Gdiplus_SolidEllipse(UIControl[L"Image/test/x"].v + 30, UIControl[L"Image/test/y"].v, 10, 10, RGBA(228, 55, 66, 255), false, SmoothingModeHighQuality, &background);
 
 				Gdiplus::Font gp_font(&HarmonyOS_fontFamily, UIControl[L"Words/test/height"].v, FontStyleRegular, UnitPixel);
 				SolidBrush WordBrush(hiex::ConvertToGdiplusColor(UIControlColor[L"Words/test/words_color"].v, true));
@@ -5132,7 +5133,6 @@ void DrawScreen()
 		if (for_num == 1)
 		{
 			IdtWindowsIsVisible.floatingWindow = true;
-			//ShowWindow(floating_window, SW_SHOW);
 		}
 
 		if (tRecord)

@@ -7,28 +7,54 @@ bool UnOccupyFile(HANDLE* hFile);
 
 struct SetListStruct
 {
+#pragma region 软件版本
+	string UpdateChannel;
+	string updateChannelExtra;
+	string updateArchitecture;
+#pragma endregion
+
+#pragma region 常规
 	int selectLanguage;
 
 	bool startUp;
-	bool CreateLnk;
+
+	int SetSkinMode, SkinMode;
+	float settingGlobalScale;
 
 	bool RightClickClose;
 	bool BrushRecover, RubberRecover;
 
-	int paintDevice;
-	bool liftStraighten, waitStraighten;
-	bool pointAdsorption;
-	bool smoothWriting;
-	bool smartEraser;
-
-	int SetSkinMode, SkinMode;
-
-	string UpdateChannel;
-	string updateChannelExtra;
-
 	// 兼容自动隐藏的任务栏
 	bool compatibleTaskBarAutoHide;
 	bool forceTop;
+#pragma endregion
+
+#pragma region 绘制
+	int paintDevice;
+
+	bool liftStraighten, waitStraighten;
+	bool pointAdsorption;
+
+	bool smoothWriting;
+
+	struct
+	{
+		int eraserMode; // 0笔速模式 1压感模式 2固定粗细
+		bool eraserPressurePriority;
+		int eraserSize;
+	}eraserSetting;
+#pragma endregion
+
+#pragma region 性能
+	struct
+	{
+		int preparationQuantity;
+	}performanceSetting;
+#pragma endregion
+
+#pragma region 插件
+	bool createLnk, correctLnk;
+#pragma endregion
 };
 extern SetListStruct setlist;
 bool ReadSetting();
@@ -57,6 +83,9 @@ struct PptComSetListStruct
 		middleSideBothWidgetScale = 1.0f;
 
 		autoKillWpsProcess = true;
+
+		// 附加信息项
+		setAdmin = false;
 	}
 
 	// 墨迹固定在对应页面上
@@ -84,14 +113,17 @@ struct PptComSetListStruct
 
 	// 自动结束未正确关闭的 WPP 进程
 	bool autoKillWpsProcess;
+
+	// 附加信息项
+	bool setAdmin;
 };
 extern PptComSetListStruct pptComSetlist;
 bool PptComReadSetting();
 bool PptComWriteSetting();
 
-struct DdbSetListStruct
+struct DdbInteractionSetListStruct
 {
-	DdbSetListStruct()
+	DdbInteractionSetListStruct()
 	{
 		DdbEnable = false;
 		DdbEnhance = false;
@@ -124,6 +156,6 @@ struct DdbSetListStruct
 
 	bool InterceptWindow[10];
 };
-extern DdbSetListStruct ddbSetList;
-bool DdbReadSetting();
-bool DdbWriteSetting(bool change, bool close);
+extern DdbInteractionSetListStruct ddbInteractionSetList;
+bool DdbReadInteraction();
+bool DdbWriteInteraction(bool change, bool close);
